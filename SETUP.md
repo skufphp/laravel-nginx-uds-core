@@ -1,293 +1,464 @@
-# SETUP — Laravel Boilerplate (PHP-FPM + Nginx Unix Socket + External PostgreSQL/MySQL + External Redis Cluster)
+# Инструкция по работе с Laravel Boilerplate
 
-Этот boilerplate предназначен для быстрого старта Laravel-проекта в Docker Compose, где:
-- **внутри Compose живут только app-сервисы** (PHP-FPM + Nginx + Node/Vite в dev);
-- **База данных (PostgreSQL или MySQL) — внешняя** (managed DB или отдельный сервер/кластер);
-- **Redis Cluster — внешний** (managed Redis Cluster или отдельный кластер);
-- миграции запускаются **one-off** сервисом `migrate` (prod-like подход).
+Этот boilerplate предназначен для быстрого развертывания Laravel-проекта с архитектурой **PHP-FPM 8.5 + Nginx 1.29 (Unix Socket)**, где база данных и Redis — **внешние** (не входят в Docker Compose).
 
 ---
 
-## 0) Предпосылки (что нужно заранее)
+## Содержание
 
-### На машине разработчика
-- Docker + Docker Compose (plugin)
-- Make (обычно есть на macOS)
+1. [Для каких приложений подходит](#для-каких-приложений-подходит)
+2. [Структура проекта](#структура-проекта)
+3. [Быстрый старт (Development)](#быстрый-старт-development)
+4. [Работа с окружениями](#работа-с-окружениями)
+5. [Команды Makefile](#команды-makefile)
+6. [Тестирование](#тестирование)
+7. [Production-деплой](#production-деплой)
+8. [Архитектура Docker](#архитектура-docker)
+9. [Конфигурация сервисов](#конфигурация-сервисов)
+10. [SSL/TLS (HTTPS)](#ssltls-https)
+11. [Troubleshooting](#troubleshooting)
+
+---
+
+## Для каких приложений подходит
+
+### Blade-based приложения
+Классический Laravel: Blade templates, server-side rendering, Tailwind/Bootstrap.
+**Примеры:** CRM, админки, корпоративные сайты, SaaS-панели, internal tools.
+
+### Laravel + Livewire / Inertia
+Frontend внутри Laravel: Livewire, Inertia + Vue/React. JS живёт в `resources/`, Vite используется только для сборки.
+
+### API-only backend
+Laravel как REST / GraphQL API без UI. Один сервис, простая деплой-модель.
+
+**Итог:** подходит для Blade, Livewire, Inertia, API-only, Admin panels, Small–medium SaaS.
+
+---
+
+## Структура проекта
+
+```text
+├── docker/
+│   ├── php.pgsql.Dockerfile      # PHP с расширениями для PostgreSQL
+│   ├── php.mysql.Dockerfile      # PHP с расширениями для MySQL
+│   ├── nginx.Dockerfile          # Nginx 1.29 Alpine
+│   ├── php/
+│   │   ├── php.ini               # PHP конфиг для разработки (display_errors = On)
+│   │   ├── php.prod.ini          # PHP конфиг для production (display_errors = Off, OPCache max)
+│   │   └── www.conf              # PHP-FPM pool (Unix Socket, healthcheck ping)
+│   └── nginx/
+│       └── conf.d/
+│           └── laravel.conf      # Nginx vhost (security headers, FastCGI buffers)
+├── docker-compose.yml            # Dev-конфигурация (PHP, Nginx, Node/Vite, Queue, Scheduler)
+├── docker-compose.prod.yml       # Prod-конфигурация для деплоя (Dokploy и т.п.)
+├── docker-compose.prod.local.yml # Локальный запуск prod-окружения (smoke test)
+├── .dockerignore                 # Исключения из контекста сборки
+├── .env.docker                   # Шаблон Docker-переменных для .env
+├── .env.production.example       # Пример production-переменных
+├── Makefile                      # Автоматизация всех операций
+└── README.md / SETUP.md          # Документация
+```
+
+---
+
+## Быстрый старт (Development)
+
+### Предварительные требования
+
+- **Docker** ≥ 24.0 и **Docker Compose** ≥ 2.20
+- **Git**
 - Доступ к внешним сервисам:
   - PostgreSQL / MySQL: `host:port`, база, пользователь, пароль
-  - Redis Cluster: список нод `host:port,host:port,...`, пароль/ACL (если есть), TLS (если требуется)
+  - Redis: `host:port`, пароль (если есть)
 
----
+### Шаг 1. Создание Laravel-проекта
 
-## 1) Как использовать boilerplate в новом Laravel-проекте
-
-### Вариант A (рекомендуется): создаёте новый Laravel и копируете boilerplate
-1) Создайте новый проект Laravel:
-```
-bash
-composer create-project laravel/laravel .
-```
-2) Скопируйте из этого репозитория в корень вашего Laravel-проекта:
-- папку `docker/`
-- `docker-compose.yml`
-- `docker-compose.dev.yml`
-- `docker-compose.prod.yml`
-- `Makefile`
-- `.env.docker` (как подсказки/контракт переменных)
-
-3) Проверьте, что в корне есть `.env` (Laravel создаёт его сам).
-
-4) Выберите нужный Dockerfile для PHP в `docker-compose.yml` в зависимости от вашей БД:
-   - Для **PostgreSQL**: `dockerfile: php.pgsql.Dockerfile` (по умолчанию)
-   - Для **MySQL**: `dockerfile: php.mysql.Dockerfile`
-
-   Также при переключении БД нужно переключить сеть, через которую контейнер приложения видит внешнюю БД:
-   - `postgres-dev-network` (PostgreSQL)
-   - `mysql-dev-network` (MySQL)
-
-   Важно: меняйте DB-сеть именно в сервисе `laravel-php-nginx-socket` (он должен оставаться в `laravel-nginx-socket-network` для связи с Nginx через Unix-socket, и дополнительно — в нужной сети БД).
-
-```yaml
-# docker-compose.old.yml
-services:
-  laravel-php-nginx-socket:
-    build:
-      context: ./docker
-      dockerfile: php.pgsql.Dockerfile # <--- ИЗМЕНИТЕ ЗДЕСЬ НА php.mysql.Dockerfile ПРИ НЕОБХОДИМОСТИ
-
-    # и здесь (PostgreSQL ↔ MySQL):
-    # networks:
-    #   - laravel-nginx-socket-network
-    #   - postgres-dev-network # или mysql-dev-network
+```bash
+composer create-project laravel/laravel my-project
+cd my-project
 ```
 
----
+### Шаг 2. Копирование файлов boilerplate
 
-## 2) Настройка `.env` (самое важное)
+Скопируйте в корень Laravel-проекта:
+- Папку `docker/` (со всеми подпапками)
+- Файлы `docker-compose.yml`, `docker-compose.prod.yml`, `docker-compose.prod.local.yml`
+- Файлы `Makefile`, `.dockerignore`, `.env.docker`, `.env.production.example`
 
-> Важно: в external-модели **нет** контейнеров БД/Redis внутри Compose, поэтому `DB_HOST` и Redis-параметры **должны указывать на внешние endpoints**.
+### Шаг 3. Выбор Dockerfile для вашей БД
 
-### 2.1 Настройка Базы Данных (PostgreSQL или MySQL)
+В boilerplate есть два варианта Dockerfile для PHP:
+- `docker/php.pgsql.Dockerfile` — с расширениями для PostgreSQL
+- `docker/php.mysql.Dockerfile` — с расширениями для MySQL
 
-В external-модели (внешняя БД) Laravel **не создаёт базы данных** автоматически. Команда `php artisan migrate` создаёт таблицы, но не делает `CREATE DATABASE`.
+Переименуйте нужный в `php.Dockerfile` и удалите ненужный:
 
-Базу для проекта нужно создать заранее вручную (через SQL или админку).
+**Для PostgreSQL:**
+```bash
+mv docker/php.pgsql.Dockerfile docker/php.Dockerfile
+rm docker/php.mysql.Dockerfile
+```
 
-#### PostgreSQL:
-В вашем `.env` установите:
+**Для MySQL:**
+```bash
+mv docker/php.mysql.Dockerfile docker/php.Dockerfile
+rm docker/php.pgsql.Dockerfile
+```
+
+### Шаг 4. Настройка конфигурационных файлов Laravel
+
+#### Удаление лишних файлов
+
+Laravel по умолчанию создаёт `database/database.sqlite`. В этом стеке используется внешняя БД, поэтому удалите файл и добавьте маску в `.gitignore`:
+
+```bash
+rm database/database.sqlite
+```
+
+Добавьте в `.gitignore`:
+
+```text
+database/*.sqlite
+```
+
+#### Обновление fallback-значений конфигурации
+
+Laravel хранит дефолтные значения подключений в `config/`. По умолчанию они указывают на `sqlite` и `database`. Для корректной работы замените их на значения, соответствующие вашему стеку:
+
+**`config/database.php`**
+```php
+// Для PostgreSQL:
+'default' => env('DB_CONNECTION', 'pgsql'),
+// Для MySQL:
+'default' => env('DB_CONNECTION', 'mysql'),
+```
+
+**`config/queue.php`**
+```php
+'default' => env('QUEUE_CONNECTION', 'redis'),
+// ...
+'batching' => [
+    'database' => env('DB_CONNECTION', 'pgsql'), // или 'mysql'
+],
+'failed' => [
+    'database' => env('DB_CONNECTION', 'pgsql'), // или 'mysql'
+],
+```
+
+**`config/cache.php`**
+```php
+'default' => env('CACHE_STORE', 'redis'),
+```
+
+**`config/session.php`**
+```php
+'driver' => env('SESSION_DRIVER', 'redis'),
+```
+
+> **Примечание:** Миграция `create_cache_table` создаёт таблицу `cache` в БД, но при `CACHE_STORE=redis` она не используется. Её можно удалить для чистоты или оставить как fallback.
+
+### Шаг 5. Настройка .env
+
+Откройте `.env` и внесите изменения:
+
 ```dotenv
+# --- Подключение к внешней БД ---
+# PostgreSQL:
 DB_CONNECTION=pgsql
 DB_HOST=<postgres_host>
 DB_PORT=5432
-DB_DATABASE=app1_db
-DB_USERNAME=app1_user
-DB_PASSWORD=<PASSWORD>
-```
+DB_DATABASE=laravel
+DB_USERNAME=postgres
+DB_PASSWORD=password
 
-#### MySQL:
-В вашем `.env` установите:
-```dotenv
-DB_CONNECTION=mysql
-DB_HOST=<mysql_host>
-DB_PORT=3306
-DB_DATABASE=app1_db
-DB_USERNAME=app1_user
-DB_PASSWORD=<PASSWORD>
-```
+# MySQL:
+# DB_CONNECTION=mysql
+# DB_HOST=<mysql_host>
+# DB_PORT=3306
+# DB_DATABASE=laravel
+# DB_USERNAME=root
+# DB_PASSWORD=password
 
-После изменения `.env` обязательно сбросьте кэш конфигурации:
-```bash
-php artisan config:clear
-php artisan cache:clear
-```
+# --- Redis ---
+REDIS_HOST=<redis_host>
+REDIS_PORT=6379
+REDIS_PASSWORD=
 
-Дальше запускайте миграции:
-```bash
-php artisan migrate
-```
+QUEUE_CONNECTION=redis
+SESSION_DRIVER=redis
+CACHE_STORE=redis
 
-#### 🧰 Если в PhpStorm/DataGrip “миграции прошли, а таблиц не видно”
-Это часто не баг, а настройка отображения.
-1. Database tool window → ваш datasource → база `app1_db`.
-2. Откройте **Schemas…** (или Properties → Schemas).
-3. Отметьте схему **`public`**.
-4. Нажмите **Apply / OK** и сделайте **Refresh**.
-
-#### TLS для Postgres (если нужно)
-В зависимости от провайдера/драйвера может использоваться `DB_SSLMODE`.
-Если ваша инфраструктура требует TLS, добавьте (пример):
-```
-dotenv
-DB_SSLMODE=require
-```
----
-
-### 2.2 Redis Cluster (external)
-Этот boilerplate предполагает контракт через переменные окружения.
-
-Добавьте в `.env` (если используете Redis):
-```
-dotenv
-REDIS_CLIENT=phpredis
-REDIS_CLUSTER=redis
-REDIS_CLUSTER_NODES=<host1>:<port1>,<host2>:<port2>,<host3>:<port3>
-REDIS_PASSWORD=<redis_password_or_empty>
-REDIS_TLS=false
-```
-Примечания:
-- `REDIS_CLUSTER_NODES` — CSV строка нод кластера.
-- `REDIS_PASSWORD` — оставьте пустым, если пароль не нужен.
-- `REDIS_TLS` — `true`, если ваш managed Redis Cluster требует TLS.
-
----
-
-### 2.3 Docker/dev-переменные
-В dev обычно достаточно порта Nginx и опционально Xdebug.
-
-Вы можете:
-- либо **добавить** нужные переменные в `.env`,
-- либо использовать `.env.docker` как “шпаргалку”.
-
-Минимальный набор для dev:
-```
-dotenv
-NGINX_PORT=80
+# --- Docker-переменные (из .env.docker) ---
+NGINX_PORT=8050
 
 XDEBUG_MODE=off
 XDEBUG_START=no
 XDEBUG_CLIENT_HOST=host.docker.internal
 ```
----
 
-## 3) Запуск DEV окружения
+> **Важно:** В external-модели Laravel **не создаёт базы данных** автоматически. `php artisan migrate` создаёт только таблицы. Базу нужно создать заранее вручную.
 
-### 3.1 Быстрый старт
-```
-bash
+### Шаг 6. Запуск
+
+```bash
 make setup
 ```
-Что делает `make setup` (логика может отличаться, если вы её меняли):
-- сборка образов
-- запуск контейнеров
-- установка зависимостей (composer + npm)
-- генерация ключа приложения
-- запуск миграций
-- фиксация прав на `storage/` и `bootstrap/cache`
 
-### 3.2 Обычные команды на каждый день
-Поднять/остановить:
-```
-bash
-make up
-make down
-```
-Логи:
-```
-bash
-make logs
-make logs-php
-make logs-nginx
-make logs-node
-```
-Войти в контейнер:
-```
-bash
-make shell-php
-make shell-nginx
-make shell-node
-```
-Artisan/Composer:
-```
-bash
-make artisan CMD="about"
-make artisan CMD="migrate"
-make composer CMD="install"
-```
-Открыть приложение:
-- http://localhost (или порт из `NGINX_PORT`)
+Эта команда автоматически:
+1. Соберёт Docker-образы
+2. Запустит контейнеры (PHP-FPM, Nginx, Queue Worker, Scheduler, Node HMR)
+3. Установит зависимости (Composer + NPM)
+4. Сгенерирует `APP_KEY`
+5. Запустит миграции
+6. Настроит права доступа
+7. Удалит `public/.htaccess`
+
+**Готово!** Проект доступен на http://localhost:8050 (или порт из `NGINX_PORT`).
 
 ---
 
-## 4) Запуск PROD-like (локально или на сервере)
+## Работа с окружениями
 
-> В production overlay обычно используются **готовые образы из Registry** (`docker-compose.prod.yml`).
+### Development (по умолчанию)
 
-Поднять прод-стек:
+```bash
+make up          # Запустить
+make down        # Остановить
+make restart     # Перезапустить
+make logs        # Логи всех сервисов
 ```
-bash
+
+Особенности dev-режима:
+- Код монтируется из хоста (изменения применяются мгновенно)
+- Vite HMR для горячей перезагрузки фронтенда
+- Порт Nginx проброшен наружу (по умолчанию `8050`)
+- Xdebug установлен и включается через `.env`
+- `php.ini` с `display_errors = On`
+
+### Production (локальный smoke test)
+
+```bash
+cp .env.production.example .env.production
 make up-prod
+make logs-prod
 ```
-Запустить миграции one-off:
-```
-bash
-docker compose -f docker-compose.yml -f docker-compose.prod.yml run --rm migrate
-```
----
 
-## 5) Как работает `migrate` в external-модели
+Особенности prod-режима:
+- Локальный запуск через `docker-compose.prod.local.yml`
+- `php.prod.ini`: `display_errors = Off`, OPCache без проверки timestamps
+- `composer install --no-dev --optimize-autoloader` внутри образа
+- Автоматические миграции при старте PHP-контейнера
+- Queue Worker и Scheduler из тех же образов
+- Graceful shutdown (`STOPSIGNAL SIGQUIT`)
 
-Сервис `migrate`:
-- использует тот же PHP-образ, что и приложение;
-- подключается к **внешней** PostgreSQL через переменные `.env`;
-- выполняет:
-```
-bash
-php artisan migrate --force
-```
-Рекомендации для CI/CD:
-- миграции должны выполняться **последовательно** (не параллельно несколькими деплоями)
-- порядок обычно такой:
-  1) pull новых образов
-  2) `up -d` приложения
-  3) `run --rm migrate`
+### Production (деплой через Dokploy)
+
+Используется `docker-compose.prod.yml` — без проброса портов, порты управляются через Dokploy.
 
 ---
 
-## 6) Типичные проблемы и быстрые проверки
+## Команды Makefile
 
-### 6.1 Миграции не подключаются к БД
-Проверьте:
-- `DB_HOST/DB_PORT` доступны из контейнера (сетевой доступ/фаервол/VPC).
-- База данных и пользователь созданы (см. раздел 2.1).
-- Креды верные (`DB_DATABASE/DB_USERNAME/DB_PASSWORD`).
-- `DB_CONNECTION=pgsql`.
+### Управление контейнерами
 
-### 6.2 В PhpStorm/DataGrip не видно таблиц
-Если миграции прошли успешно, но в IDE дерево таблиц пустое:
-1. В окне Database выберите ваш datasource → база `app1_db`.
-2. Откройте **Schemas…** (или Properties → Schemas).
-3. Отметьте схему **`public`**.
-4. Нажмите **Apply / OK** и сделайте **Refresh**.
+| Команда | Описание |
+|---------|----------|
+| `make up` | Запустить проект (dev) |
+| `make up-prod` | Запустить проект (prod, локально) |
+| `make down` | Остановить dev-контейнеры |
+| `make down-prod` | Остановить prod-контейнеры |
+| `make restart` | Перезапустить контейнеры |
+| `make build` | Собрать образы |
+| `make rebuild` | Пересобрать dev-образы без кэша |
+| `make rebuild-prod` | Пересобрать prod-образы без кэша |
+| `make status` | Статус контейнеров |
+| `make clean` | Удалить контейнеры и тома |
+| `make clean-all` | Полная очистка dev (+ образы) |
+| `make dev-reset` | Сброс среды разработки |
+| `make clean-prod` | Удалить prod-контейнеры и тома |
+| `make clean-all-prod` | Полная очистка prod (+ образы) |
+| `make prod-reset` | Сброс prod-среды |
 
-### 6.3 Redis Cluster “не виден” или таймауты
-Проверьте:
-- `REDIS_CLUSTER_NODES` в формате `host:port,host:port,...` без лишних пробелов
-- `REDIS_TLS=true`, если ваш кластер требует TLS
-- пароль/ACL (если включены)
+### Логи
 
-### 6.4 В dev не открывается сайт
-Проверьте:
-- `NGINX_PORT` не занят другим процессом
-- контейнеры в статусе `healthy`:
+| Команда | Описание |
+|---------|----------|
+| `make logs` | Все dev-сервисы |
+| `make logs-prod` | Все prod-сервисы |
+| `make logs-php` | PHP-FPM |
+| `make logs-php-prod` | PHP-FPM (prod) |
+| `make logs-nginx` | Nginx |
+| `make logs-nginx-prod` | Nginx (prod) |
+| `make logs-queue` | Queue Worker |
+| `make logs-queue-prod` | Queue Worker (prod) |
+| `make logs-scheduler` | Scheduler |
+| `make logs-scheduler-prod` | Scheduler (prod) |
+| `make logs-node` | Node (HMR) |
+
+### Shell-доступ
+
+| Команда | Описание |
+|---------|----------|
+| `make shell-php` | Консоль PHP-контейнера |
+| `make shell-php-prod` | Консоль PHP-контейнера (prod) |
+| `make shell-nginx` | Консоль Nginx |
+| `make shell-nginx-prod` | Консоль Nginx (prod) |
+| `make shell-node` | Консоль Node |
+| `make shell-queue` | Консоль Queue Worker |
+| `make shell-queue-prod` | Консоль Queue Worker (prod) |
+| `make shell-scheduler` | Консоль Scheduler |
+| `make shell-scheduler-prod` | Консоль Scheduler (prod) |
+
+### Laravel и зависимости
+
+| Команда | Описание |
+|---------|----------|
+| `make setup` | Полная инициализация проекта |
+| `make install-deps` | Установить Composer + NPM зависимости |
+| `make artisan CMD="..."` | Любая artisan-команда |
+| `make composer CMD="..."` | Любая composer-команда |
+| `make composer-install` | `composer install` |
+| `make composer-update` | `composer update` |
+| `make composer-require PACKAGE=vendor/pkg` | `composer require` |
+| `make migrate` | Запустить миграции |
+| `make rollback` | Откатить миграции |
+| `make fresh` | Пересоздать БД + сиды |
+| `make tinker` | Laravel Tinker |
+| `make test-php` | PHP-тесты |
+| `make test-coverage` | Тесты с покрытием |
+| `make npm-install` | `npm install` |
+| `make npm-dev` | Vite dev server |
+| `make npm-build` | Production-сборка фронтенда |
+| `make permissions` | Исправить права `storage` и `bootstrap/cache` |
+| `make cleanup-nginx` | Удалить `public/.htaccess` |
+| `make info` | Показать информацию о проекте |
+| `make validate` | Проверить HTTP-доступность |
+
+---
+
+## Тестирование
+
+```bash
+make test-php
+make test-coverage
 ```
-bash
-make status
+
+Для покрытия используется Xdebug.
+
+---
+
+## Production-деплой
+
+### Локальная проверка (smoke test)
+
+```bash
+cp .env.production.example .env.production
+make up-prod
+make logs-prod
 ```
----
 
-## 7) Что этот boilerplate *не делает намеренно*
-- Не поднимает Postgres/Redis/pgAdmin внутри Docker Compose (это “external infra” версия).
-- Не хранит секреты в репозитории: пароли/ключи должны приходить из `.env` (dev) или секретов CI/CD (prod).
+### Деплой через Dokploy
 
----
+Используется `docker-compose.prod.yml`. Порты не пробрасываются — управление через Dokploy.
 
-## 8) Мини-чеклист “готово к работе”
-- [ ] `docker compose ...` поднимает `php` + `nginx` (+ `node` в dev)
-- [ ] В `docker-compose.yml` выбран правильный `dockerfile` для вашей БД
-- [ ] `.env` содержит валидные `DB_*` для внешней БД
-- [ ] (опционально) `.env` содержит `REDIS_*` для внешнего Redis Cluster
-- [ ] `make setup` проходит и `php artisan migrate` выполняется
-- [ ] сайт открывается на `http://localhost` (или вашем порту)
+Что важно проверить перед деплоем:
+- Актуальные значения `APP_URL`, `APP_KEY`, `DB_*`, `REDIS_*`
+- Доступность внешней БД и Redis из контейнерной сети
+- Настройки TLS-терминации на уровне Dokploy
 
 ---
 
+## Архитектура Docker
+
+### Схема взаимодействия
+
+```text
+                    ┌─────────────┐
+                    │   Client    │
+                    └──────┬──────┘
+                           │ :80 / :8050
+                    ┌──────▼──────┐
+                    │    Nginx    │
+                    │   (Alpine)  │
+                    └──────┬──────┘
+                           │ Unix Socket
+                    ┌──────▼──────┐
+                    │   PHP-FPM   │
+                    │ (8.5 Alpine)│
+                    └──────┬──────┘
+                           │
+              ┌────────────┼────────────┐
+              ▼            ▼            ▼
+     ┌──────────────┐ ┌────────┐ ┌──────────┐
+     │ PostgreSQL / │ │ Redis  │ │ Queue /  │
+     │    MySQL     │ │(external)│ │Scheduler │
+     │  (external)  │ └────────┘ └──────────┘
+     └──────────────┘
+```
+
+### Ключевая идея
+
+Nginx проксирует PHP-запросы в PHP-FPM через Unix Socket (`/var/run/php/php-fpm.sock`). БД и Redis — внешние сервисы, подключаемые через переменные окружения. Это позволяет использовать managed-сервисы или выделенные серверы для инфраструктуры.
+
+---
+
+## Конфигурация сервисов
+
+### PHP-FPM
+- Базовый runtime Laravel-приложения
+- В dev-режиме монтирует код проекта
+- В prod-режиме собирается как финальный immutable image
+
+### Nginx
+- Обслуживает публичные ассеты
+- Проксирует PHP через FastCGI
+- Использует конфигурацию из `docker/nginx/conf.d/laravel.conf`
+
+### Node (dev only)
+- Vite HMR для горячей перезагрузки фронтенда
+
+### Queue Worker / Scheduler
+- Отдельные сервисы для фоновых задач Laravel
+- Используют тот же PHP-образ
+
+---
+
+## SSL/TLS (HTTPS)
+
+По умолчанию boilerplate работает по HTTP. Для production HTTPS обычно завершается:
+- на уровне Dokploy / reverse proxy / ingress
+- на балансировщике перед контейнерами
+
+---
+
+## Troubleshooting
+
+### Сайт не открывается
+- Проверьте `make status`
+- Проверьте `make logs-nginx`
+- Убедитесь, что порт `NGINX_PORT` свободен
+
+### Laravel не подключается к БД
+- Проверьте `DB_HOST` — должен указывать на внешний хост БД
+- Убедитесь, что БД доступна из контейнерной сети
+- Убедитесь, что база данных создана заранее
+
+### Redis недоступен
+- Проверьте `REDIS_HOST` — должен указывать на внешний хост Redis
+- Проверьте доступность из контейнерной сети
+- Если задан пароль, убедитесь, что он совпадает
+
+### Vite HMR не работает
+- Проверьте `make logs-node`
+- Убедитесь, что порт `5173` свободен
+
+### Ошибки прав доступа
+```bash
+make permissions
+```
+
+### Остался `public/.htaccess`
+```bash
+make cleanup-nginx
+```

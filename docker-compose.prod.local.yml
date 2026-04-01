@@ -65,6 +65,7 @@ services:
       - laravel-nginx-uds-core-network
       - postgres-dev-network
       - mysql-dev-network
+      - redis
     healthcheck:
       # Проверка доступности FPM через сокет
       test:
@@ -93,8 +94,6 @@ services:
       - "${NGINX_PORT:-8050}:80"
     networks:
       - laravel-nginx-uds-core-network
-      - postgres-dev-network
-      - mysql-dev-network
     depends_on:
       laravel-php-nginx-uds-core:
         condition: service_healthy
@@ -119,6 +118,7 @@ services:
       - laravel-nginx-uds-core-network
       - postgres-dev-network
       - mysql-dev-network
+      - redis
     depends_on:
       laravel-php-nginx-uds-core:
         condition: service_healthy
@@ -143,6 +143,7 @@ services:
       - laravel-nginx-uds-core-network
       - postgres-dev-network
       - mysql-dev-network
+      - redis
     depends_on:
       laravel-php-nginx-uds-core:
         condition: service_healthy
@@ -154,7 +155,7 @@ networks:
   laravel-nginx-uds-core-network:
     driver: bridge
 
-  redis-cluster-dev:
+  redis:
     external: true
 
   postgres-dev-network:

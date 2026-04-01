@@ -5,9 +5,9 @@
 .PHONY: \
 	help check-files check-files-prod \
 	up up-prod down down-prod restart build rebuild rebuild-prod \
-	logs logs-prod logs-php logs-php-prod logs-postgres logs-postgres-prod logs-pgadmin logs-node logs-redis logs-redis-prod logs-queue logs-queue-prod logs-scheduler logs-scheduler-prod logs-nginx logs-nginx-prod \
+	logs logs-prod logs-php logs-php-prod logs-node logs-queue logs-queue-prod logs-scheduler logs-scheduler-prod logs-nginx logs-nginx-prod \
 	status \
-	shell-php shell-php-prod shell-node shell-postgres shell-postgres-prod shell-redis shell-redis-prod shell-queue shell-queue-prod shell-scheduler shell-scheduler-prod shell-nginx shell-nginx-prod \
+	shell-php shell-php-prod shell-node shell-queue shell-queue-prod shell-scheduler shell-scheduler-prod shell-nginx shell-nginx-prod \
 	setup install-deps \
 	composer-install composer-update composer-require \
 	npm-install npm-dev npm-build \
@@ -31,14 +31,11 @@ NGINX_PORT := 8050
 endif
 
 # Сервисы (имена сервисов из compose-файлов)
-PHP_SERVICE=laravel-php-nginx-uds
-NGINX_SERVICE=laravel-nginx-uds
-POSTGRES_SERVICE=laravel-postgres-nginx-uds
-REDIS_SERVICE=laravel-redis-nginx-uds
-PGADMIN_SERVICE=laravel-pgadmin-nginx-uds
-NODE_SERVICE=laravel-node-nginx-uds
-QUEUE_SERVICE=laravel-queue-nginx-uds
-SCHEDULER_SERVICE=laravel-scheduler-nginx-uds
+PHP_SERVICE=laravel-php-nginx-uds-core
+NGINX_SERVICE=laravel-nginx-uds-core
+NODE_SERVICE=laravel-node-nginx-uds-core
+QUEUE_SERVICE=laravel-queue-nginx-uds-core
+SCHEDULER_SERVICE=laravel-scheduler-nginx-uds-core
 
 help: ## Показать справку
 	@echo "$(YELLOW)Laravel PHP-FPM and Nginx Docker Boilerplate with Unix Socket$(NC)"
@@ -107,26 +104,11 @@ logs-php-prod: ## Просмотр логов PHP-FPM (Prod)
 logs-nginx: ## Просмотр логов Nginx
 	$(COMPOSE) logs -f $(NGINX_SERVICE)
 
-logs-nginx-prod: ## Просмотр логов Nginx
+logs-nginx-prod: ## Просмотр логов Nginx (Prod)
 	$(COMPOSE_PROD) logs -f $(NGINX_SERVICE)
-
-logs-postgres: ## Просмотр логов PostgreSQL
-	$(COMPOSE) logs -f $(POSTGRES_SERVICE)
-
-logs-postgres-prod: ## Просмотр логов PostgreSQL (Prod)
-	$(COMPOSE_PROD) logs -f $(POSTGRES_SERVICE)
-
-logs-pgadmin: ## Просмотр логов pgAdmin
-	$(COMPOSE) logs -f $(PGADMIN_SERVICE)
 
 logs-node: ## Просмотр логов Node (HMR)
 	$(COMPOSE) logs -f $(NODE_SERVICE)
-
-logs-redis: ## Просмотр логов Redis
-	$(COMPOSE) logs -f $(REDIS_SERVICE)
-
-logs-redis-prod: ## Просмотр логов Redis (Prod)
-	$(COMPOSE_PROD) logs -f $(REDIS_SERVICE)
 
 logs-queue: ## Просмотр логов Queue Worker
 	$(COMPOSE) logs -f $(QUEUE_SERVICE)
@@ -152,7 +134,7 @@ shell-php-prod: ## Войти в контейнер PHP (Prod)
 shell-nginx: ## Подключиться к контейнеру Nginx
 	$(COMPOSE) exec $(NGINX_SERVICE) sh
 
-shell-nginx-prod: ## Подключиться к контейнеру Nginx
+shell-nginx-prod: ## Подключиться к контейнеру Nginx (Prod)
 	$(COMPOSE_PROD) exec $(NGINX_SERVICE) sh
 
 shell-node: ## Подключиться к контейнеру Node
@@ -170,50 +152,11 @@ shell-scheduler: ## Войти в контейнер Scheduler
 shell-scheduler-prod: ## Войти в контейнер Scheduler (Prod)
 	$(COMPOSE_PROD) exec $(SCHEDULER_SERVICE) sh
 
-shell-postgres: ## Подключиться к PostgreSQL CLI
-	@echo "$(YELLOW)Подключение к базе...$(NC)"
-	@DB_USER=$$(grep '^DB_USERNAME=' .env | cut -d '=' -f 2- | tr -d '[:space:]'); \
-	DB_NAME=$$(grep '^DB_DATABASE=' .env | cut -d '=' -f 2- | tr -d '[:space:]'); \
-	$(COMPOSE) exec $(POSTGRES_SERVICE) psql -U $$DB_USER -d $$DB_NAME
-
-shell-postgres-prod: ## Подключиться к PostgreSQL CLI (Prod)
-	@echo "$(YELLOW)Подключение к базе (Prod)...$(NC)"
-	@DB_USER=$$(grep '^DB_USERNAME=' .env.production | cut -d '=' -f 2- | tr -d '[:space:]'); \
-	DB_NAME=$$(grep '^DB_DATABASE=' .env.production | cut -d '=' -f 2- | tr -d '[:space:]'); \
-	$(COMPOSE_PROD) exec $(POSTGRES_SERVICE) psql -U $$DB_USER -d $$DB_NAME
-
-shell-redis: ## Подключиться к Redis CLI
-	@echo "$(YELLOW)Подключение к Redis...$(NC)"
-	@REDIS_PASSWORD=$$(grep '^REDIS_PASSWORD=' .env 2>/dev/null | cut -d '=' -f 2- | tr -d '[:space:]'); \
-	if [ -n "$$REDIS_PASSWORD" ]; then \
-		$(COMPOSE) exec $(REDIS_SERVICE) redis-cli -a "$$REDIS_PASSWORD" ping; \
-	else \
-		$(COMPOSE) exec $(REDIS_SERVICE) redis-cli ping; \
-	fi
-
-shell-redis-prod: ## Подключиться к Redis CLI (Prod)
-	@echo "$(YELLOW)Подключение к Redis (Prod)...$(NC)"
-	@REDIS_PASSWORD=$$(grep '^REDIS_PASSWORD=' .env.production 2>/dev/null | cut -d '=' -f 2- | tr -d '[:space:]'); \
-	if [ -n "$$REDIS_PASSWORD" ]; then \
-		$(COMPOSE_PROD) exec $(REDIS_SERVICE) redis-cli -a "$$REDIS_PASSWORD" ping; \
-	else \
-		$(COMPOSE_PROD) exec $(REDIS_SERVICE) redis-cli ping; \
-	fi
-
 # --- Команды Laravel ---
 
 setup: ## Полная инициализация проекта с нуля
 	@make build
 	@make up
-	@echo "$(YELLOW)Ожидание готовности PostgreSQL...$(NC)"
-	@$(COMPOSE) exec $(POSTGRES_SERVICE) sh -c 'until pg_isready; do sleep 1; done'
-	@echo "$(YELLOW)Ожидание готовности Redis...$(NC)"
-	@REDIS_PASSWORD=$$(grep '^REDIS_PASSWORD=' .env 2>/dev/null | cut -d '=' -f 2- | tr -d '[:space:]'); \
-	if [ -n "$$REDIS_PASSWORD" ]; then \
-		$(COMPOSE) exec $(REDIS_SERVICE) sh -c "until redis-cli -a '$$REDIS_PASSWORD' ping | grep -q PONG; do sleep 1; done"; \
-	else \
-		$(COMPOSE) exec $(REDIS_SERVICE) sh -c 'until redis-cli ping | grep -q PONG; do sleep 1; done'; \
-	fi
 	@make install-deps
 	@make artisan CMD="key:generate"
 	@make migrate
@@ -295,11 +238,13 @@ info: ## Показать информацию о проекте
 	@echo "$(GREEN)Сервисы:$(NC)"
 	@echo "  • PHP-FPM 8.5 (Alpine)"
 	@echo "  • Nginx"
-	@echo "  • PostgreSQL 18.2"
-	@echo "  • Redis 8.6"
 	@echo "  • Queue Worker"
 	@echo "  • Scheduler (cron)"
-	@echo "  • pgAdmin 4 (dev only)"
+	@echo "  • Node.js / Vite HMR (dev only)"
+	@echo ""
+	@echo "$(GREEN)Внешние сервисы (не в Compose):$(NC)"
+	@echo "  • PostgreSQL / MySQL"
+	@echo "  • Redis"
 	@echo ""
 	@echo "$(GREEN)Структура:$(NC)"
 	@echo "  • docker/           - Dockerfiles и конфиги сервисов"
@@ -307,24 +252,19 @@ info: ## Показать информацию о проекте
 	@echo ""
 	@echo "$(GREEN)Порты:$(NC)"
 	@echo "  • $(NGINX_PORT) - Nginx (Web Server)"
-	@echo "  • 5432 - PostgreSQL (dev forwarded)"
-	@echo "  • 6379 - Redis (dev forwarded)"
 	@echo "  • 5173 - Vite HMR (dev)"
-	@echo "  • 8080 - pgAdmin (dev only)"
 	@echo "  • Unix Socket - Связь PHP-FPM <-> Nginx"
 
 validate: ## Проверить доступность сервисов по HTTP
 	@echo "$(YELLOW)Проверка работы сервисов...$(NC)"
 	@echo -n "Nginx (http://localhost:$(NGINX_PORT)): "
 	@curl -s -o /dev/null -w "%{http_code}" http://localhost:$(NGINX_PORT) && echo " $(GREEN)✓$(NC)" || echo " $(RED)✗$(NC)"
-	@echo -n "pgAdmin (http://localhost:8080): "
-	@curl -s -o /dev/null -w "%{http_code}" http://localhost:8080 && echo " $(GREEN)✓$(NC)" || echo " $(RED)✗$(NC)"
 	@echo "$(YELLOW)Статус контейнеров:$(NC)"
 	@$(COMPOSE) ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}"
 
 clean: ## Удалить контейнеры и тома
 	$(COMPOSE) down -v
-	@echo "$(RED)! Контейнеры и данные БД удалены$(NC)"
+	@echo "$(RED)! Контейнеры и тома удалены$(NC)"
 
 clean-all: ## Полная очистка (контейнеры, образы, тома)
 	@echo "$(YELLOW)Полная очистка...$(NC)"
@@ -336,7 +276,7 @@ dev-reset: clean-all build up ## Сброс среды разработки
 
 clean-prod: ## Удалить prod контейнеры и тома
 	$(COMPOSE_PROD) down -v
-	@echo "$(RED)! Prod контейнеры и данные БД удалены$(NC)"
+	@echo "$(RED)! Prod контейнеры и тома удалены$(NC)"
 
 clean-all-prod: ## Полная очистка prod (контейнеры, образы, тома)
 	@echo "$(YELLOW)Полная очистка prod...$(NC)"

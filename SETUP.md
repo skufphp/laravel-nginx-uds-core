@@ -48,7 +48,7 @@ composer create-project laravel/laravel .
    Важно: меняйте DB-сеть именно в сервисе `laravel-php-nginx-socket` (он должен оставаться в `laravel-nginx-socket-network` для связи с Nginx через Unix-socket, и дополнительно — в нужной сети БД).
 
 ```yaml
-# docker-compose.yml
+# docker-compose.old.yml
 services:
   laravel-php-nginx-socket:
     build:
